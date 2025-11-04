@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Аудио-плеер</title>
+    <style>
+        html,
+        body {
+            height: 100%;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            display: flex;
+            /*min-height: 100vh;*/
+            flex-direction: column;                    
+        }
+
+        .content {
+            flex-grow: 1;
+            /* Allow main content to take up available space */
+            overflow-y: auto;
+            padding: 0 1em; 
+            /* position: sticky;
+            top: 0; */
+            /* padding-bottom: 80px; */
+        }
+
+        .directory {
+            margin-bottom: 10px;
+            border: 1px solid;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        .directory-header {
+            padding: 10px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+        }
+
+        .audio-files {
+            padding: 10px;
+            display: none;
+        }
+
+        .audio-file {
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+        }
+
+        .audio-file:hover {
+            background-color: rgba(128, 128, 128, 0.1);
+        }
+
+        .audio-file.playing {
+            font-weight: bold;
+        }
+
+        .play-icon {
+            margin-right: 8px;
+        }
+
+        .current-time {
+            margin-left: auto;
+            font-size: 0.9em;
+            opacity: 0.7;
+        }
+
+        .controls {
+            /*position: sticky;*/
+            position: sticky;
+            z-index: 1000;
+            bottom: 0;
+            background-color: inherit;
+            padding: 15px 1em;
+            border-top: 1px solid;
+            margin-top: 20px;
+        }
+
+        .player-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        button {
+            padding: 8px 15px;
+            border: 1px solid;
+            border-radius: 4px;
+            background-color: inherit;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button:hover:not(:disabled) {
+            opacity: 0.8;
+        }
+
+        .progress-container {
+            flex-grow: 1;
+            height: 6px;
+            background-color: rgba(128, 128, 128, 0.3);
+            border-radius: 3px;
+            overflow: hidden;
+            cursor: pointer;
+        }
+
+        .progress-bar {
+            /* height: 100%; */
+            width: 0%;
+            background-color: #007acc;
+        }
+
+        .current-track {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .error {
+            color: red;
+            padding: 10px;
+            border: 1px solid red;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+
+        .current-directory-info {
+            margin: 15px 0;
+            padding: 10px;
+            border-radius: 5px;
+            background-color: rgba(128, 128, 128, 0.1);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="content">
+        <h1>Аудио-плеер</h1>
+        <div id="loading" class="loading">Загрузка аудиофайлов...</div>
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="current-directory-info" class="current-directory-info" style="display: none;">
+            <strong>Текущая директория:</strong> <span id="current-directory-name"></span>
+            <span id="current-directory-stats"></span>
+        </div>
+
+        <div id="directories-container"></div>
+    </div>
+    <div class="controls">
+        <div class="player-controls">
+            <button id="prev-btn" disabled>⏮</button>
+            <button id="play-pause-btn" disabled>▶</button>
+            <button id="next-btn" disabled>⏭</button>
+            <div class="progress-container" id="progress-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+            <span id="time-display">0:00 / 0:00</span>
+        </div>
+        <div class="current-track" id="current-track">Выберите аудиофайл</div>
+    </div>
+
+    <script>
+        // Состояние приложения
+        const state = {
+            directories: [],
+            currentAudio: null,
+            currentTrackIndex: -1,
+            currentDirectoryIndex: -1,
+            isPlaying: false,
+            currentDirectoryFiles: [] // Файлы только текущей директории
+        };
+
+        // Инициализация приложения
+        document.addEventListener('DOMContentLoaded', function () {
+            loadAudioDirectories();
+            setupEventListeners();
+        });
+
+        // Загрузка структуры директорий с аудиофайлами
+        async function loadAudioDirectories() {
+            try {
+                // Получаем список всех директорий в public
+                const response = await fetch('/api/v4/audio-directories');
+
+                if (!response.ok) {
+                    throw new Error('Не удалось загрузить список директорий');
+                }
+
+                const data = await response.json();
+                state.directories = data.directories;
+
+                document.getElementById('loading').style.display = 'none';
+                renderDirectories();
+
+            } catch (error) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent =
+                    `Ошибка загрузки: ${error.message}. Используется демо-режим.`;
+
+                // Загрузка демо-данных при ошибке
+                loadDemoData();
+            }
+        }
+
+        // Демо-данные для случая, когда API недоступно
+        function loadDemoData() {
+            state.directories = [
+                {
+                    name: "20251001",
+                    files: [
+                        { name: "утренняя_сессия.mp3", duration: "3:45" },
+                        { name: "обсуждение_проекта.mp3", duration: "12:30" },
+                        { name: "итоги_дня.mp3", duration: "5:15" }
+                    ]
+                },
+                {
+                    name: "20251002",
+                    files: [
+                        { name: "планирование.mp3", duration: "4:20" },
+                        { name: "встреча_с_клиентом.mp3", duration: "25:10" }
+                    ]
+                },
+                {
+                    name: "20251003",
+                    files: [
+                        { name: "мозговой_штурм.mp3", duration: "15:45" },
+                        { name: "презентация.mp3", duration: "18:30" },
+                        { name: "обратная_связь.mp3", duration: "7:50" }
+                    ]
+                }
+            ];
+
+            renderDirectories();
+        }
+
+        // Рендеринг списка директорий
+        function renderDirectories() {
+            const container = document.getElementById('directories-container');
+
+            if (state.directories.length === 0) {
+                container.innerHTML = '<p>Аудиофайлы не найдены</p>';
+                return;
+            }
+
+            container.innerHTML = '';
+
+            // Сортируем директории по имени (дате) в обратном порядке
+            const sortedDirectories = [...state.directories].sort((a, b) =>
+                b.name.localeCompare(a.name)
+            );
+
+            sortedDirectories.forEach((directory, dirIndex) => {
+                const directoryElement = document.createElement('div');
+                directoryElement.className = 'directory';
+
+                const header = document.createElement('div');
+                header.className = 'directory-header';
+                header.innerHTML = `
+                    <span>${formatDirectoryName(directory.name)}</span>
+                    <span>${directory.files.length} файлов</span>
+                `;
+
+                const audioFilesContainer = document.createElement('div');
+                audioFilesContainer.className = 'audio-files';
+                audioFilesContainer.id = `files-${directory.name}`;
+
+                directory.files.forEach((file, fileIndex) => {
+                    const fileElement = document.createElement('div');
+                    fileElement.className = 'audio-file';
+                    fileElement.dataset.dirIndex = dirIndex;
+                    fileElement.dataset.fileIndex = fileIndex;
+                    fileElement.innerHTML = `
+                        <span class="play-icon">▶</span>
+                        <span class="file-name">${file.name}</span>
+                        <span class="current-time">${file.length || '--:--'}</span>
+                    `;
+
+                    fileElement.addEventListener('click', () => playAudio(dirIndex, fileIndex));
+                    audioFilesContainer.appendChild(fileElement);
+                });
+
+                header.addEventListener('click', () => {
+                    const isVisible = audioFilesContainer.style.display === 'block';
+                    audioFilesContainer.style.display = isVisible ? 'none' : 'block';
+                });
+
+                directoryElement.appendChild(header);
+                directoryElement.appendChild(audioFilesContainer);
+                container.appendChild(directoryElement);
+            });
+        }
+
+        // Форматирование имени директории для отображения
+        function formatDirectoryName(name) {
+            // Предполагаем, что имя директории в формате YYYYMMDD
+            if (/^\d{8}$/.test(name)) {
+                const year = name.substring(0, 4);
+                const month = name.substring(4, 6);
+                const day = name.substring(6, 8);
+                return `${day}.${month}.${year}`;
+            }
+            return name;
+        }
+
+        // Настройка обработчиков событий
+        function setupEventListeners() {
+            const playPauseBtn = document.getElementById('play-pause-btn');
+            const prevBtn = document.getElementById('prev-btn');
+            const nextBtn = document.getElementById('next-btn');
+            const progressContainer = document.getElementById('progress-container');
+
+            playPauseBtn.addEventListener('click', togglePlayPause);
+            prevBtn.addEventListener('click', playPrevious);
+            nextBtn.addEventListener('click', playNext);
+            progressContainer.addEventListener('click', seekAudio);
+
+            // Создаем аудио элемент
+            state.currentAudio = new Audio();
+
+            // Обработчики событий аудио
+            state.currentAudio.addEventListener('loadedmetadata', updateAudioInfo);
+            state.currentAudio.addEventListener('timeupdate', updateProgress);
+            state.currentAudio.addEventListener('ended', onAudioEnded);
+            state.currentAudio.addEventListener('pause', updatePlayButton);
+            state.currentAudio.addEventListener('play', updatePlayButton);
+        }
+
+        // Воспроизведение аудиофайла
+        function playAudio(dirIndex, fileIndex) {
+            const directory = state.directories[dirIndex];
+            const file = directory.files[fileIndex];
+
+            // Устанавливаем текущую директорию и ее файлы
+            state.currentDirectoryIndex = dirIndex;
+            state.currentDirectoryFiles = directory.files;
+            state.currentTrackIndex = fileIndex;
+
+            // Обновляем информацию о текущей директории
+            updateCurrentDirectoryInfo(directory);
+
+            // Обновляем состояние кнопок
+            updateNavigationButtons();
+
+            // Формируем путь к аудиофайлу
+            const audioPath = `/${directory.name}/${file.name}`;
+            state.currentAudio.src = audioPath;
+
+            // Снимаем выделение с предыдущего трека
+            document.querySelectorAll('.audio-file.playing').forEach(el => {
+                el.classList.remove('playing');
+            });
+
+            // Выделяем текущий трек
+            const currentFileElement = document.querySelector(
+                `.audio-file[data-dir-index="${dirIndex}"][data-file-index="${fileIndex}"]`
+            );
+            if (currentFileElement) {
+                currentFileElement.classList.add('playing');
+            }
+
+            // Обновляем информацию о текущем треке
+            document.getElementById('current-track').textContent =
+                `${formatDirectoryName(directory.name)} / ${file.name}`;
+
+            state.currentAudio.play().catch(error => {
+                console.error('Ошибка воспроизведения:', error);
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent =
+                    `Не удалось воспроизвести файл: ${file.name}`;
+            });
+
+            state.isPlaying = true;
+            updatePlayButton();
+        }
+
+        // Обновление информации о текущей директории
+        function updateCurrentDirectoryInfo(directory) {
+            const infoElement = document.getElementById('current-directory-info');
+            const nameElement = document.getElementById('current-directory-name');
+            const statsElement = document.getElementById('current-directory-stats');
+
+            nameElement.textContent = formatDirectoryName(directory.name);
+            statsElement.textContent = ` (${state.currentTrackIndex + 1}/${directory.files.length})`;
+
+            infoElement.style.display = 'block';
+        }
+
+        // Обновление состояния кнопок навигации
+        function updateNavigationButtons() {
+            const prevBtn = document.getElementById('prev-btn');
+            const nextBtn = document.getElementById('next-btn');
+            const playPauseBtn = document.getElementById('play-pause-btn');
+
+            // Активируем кнопку воспроизведения
+            playPauseBtn.disabled = false;
+
+            // Проверяем возможность перехода к предыдущему треку
+            if (state.currentTrackIndex > 0) {
+                prevBtn.disabled = false;
+            } else {
+                prevBtn.disabled = true;
+            }
+
+            // Проверяем возможность перехода к следующему треку
+            if (state.currentTrackIndex < state.currentDirectoryFiles.length - 1) {
+                nextBtn.disabled = false;
+            } else {
+                nextBtn.disabled = true;
+            }
+        }
+
+        // Переключение воспроизведения/паузы
+        function togglePlayPause() {
+            if (!state.currentAudio.src) return;
+
+            if (state.isPlaying) {
+                state.currentAudio.pause();
+            } else {
+                state.currentAudio.play().catch(error => {
+                    console.error('Ошибка воспроизведения:', error);
+                });
+            }
+        }
+
+        // Воспроизведение предыдущего трека в текущей директории
+        function playPrevious() {
+            if (state.currentDirectoryIndex === -1 || state.currentDirectoryFiles.length === 0) return;
+
+            let newFileIndex = state.currentTrackIndex - 1;
+            if (newFileIndex >= 0) {
+                playAudio(state.currentDirectoryIndex, newFileIndex);
+            }
+        }
+
+        // Воспроизведение следующего трека в текущей директории
+        function playNext() {
+            if (state.currentDirectoryIndex === -1 || state.currentDirectoryFiles.length === 0) return;
+
+            let newFileIndex = state.currentTrackIndex + 1;
+            if (newFileIndex < state.currentDirectoryFiles.length) {
+                playAudio(state.currentDirectoryIndex, newFileIndex);
+            }
+        }
+
+        // Обработчик окончания воспроизведения
+        function onAudioEnded() {
+            // Автоматически переходим к следующему треку, если он есть
+            if (state.currentTrackIndex < state.currentDirectoryFiles.length - 1) {
+                playNext();
+            } else {
+                // Если это последний трек, просто останавливаем воспроизведение
+                state.isPlaying = false;
+                updatePlayButton();
+            }
+        }
+
+        // Обновление информации об аудио
+        function updateAudioInfo() {
+            updateProgress();
+        }
+
+        // Обновление прогресса воспроизведения
+        function updateProgress() {
+            const progressBar = document.getElementById('progress-bar');
+            const timeDisplay = document.getElementById('time-display');
+
+            if (state.currentAudio.duration && !isNaN(state.currentAudio.duration)) {
+                const progress = (state.currentAudio.currentTime / state.currentAudio.duration) * 100;
+                progressBar.style.width = `${progress}%`;
+
+                const currentTime = formatTime(state.currentAudio.currentTime);
+                const duration = formatTime(state.currentAudio.duration);
+                timeDisplay.textContent = `${currentTime} / ${duration}`;
+            }
+        }
+
+        // Перемотка аудио
+        function seekAudio(e) {
+            if (!state.currentAudio.duration || isNaN(state.currentAudio.duration)) return;
+
+            const progressContainer = document.getElementById('progress-container');
+            const clickX = e.offsetX;
+            const width = progressContainer.clientWidth;
+            const seekTime = (clickX / width) * state.currentAudio.duration;
+
+            state.currentAudio.currentTime = seekTime;
+        }
+
+        // Обновление кнопки воспроизведения/паузы
+        function updatePlayButton() {
+            const playPauseBtn = document.getElementById('play-pause-btn');
+            playPauseBtn.textContent = state.currentAudio.paused ? '▶' : '⏸';
+            state.isPlaying = !state.currentAudio.paused;
+        }
+
+        // Форматирование времени в мм:сс
+        function formatTime(seconds) {
+            if (isNaN(seconds)) return '0:00';
+
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        }
+    </script>
+</body>
+
+</html>
